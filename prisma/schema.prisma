@@ -1,0 +1,242 @@
+// This is the Prisma schema for the Courier Logistics application.
+// It manages regional hubs, package routing, bags, and trucks.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ───────────────────────────────────────────────
+
+enum PackageStatus {
+  to_be_picked_up
+  picked_up
+  added_to_bag
+  in_transit
+  arrived
+  scheduled_for_delivery
+  out_for_delivery
+  delivered
+  delayed
+}
+
+enum BagStatus {
+  open
+  sealed
+  in_transit
+  delivered
+}
+
+enum TruckStatus {
+  idle
+  loading
+  in_transit
+  delayed
+}
+
+enum ScheduleStatus {
+  scheduled
+  departed
+  delayed
+  cancelled
+}
+
+// ─── Models ──────────────────────────────────────────────
+
+/// Regions with optional parent for sub-region hierarchy.
+/// Example: "NORTH" can have sub-regions "NORTH-A", "NORTH-B"
+model Region {
+  id             String   @id @default(uuid())
+  regionCode     String   @unique @map("region_code")
+  regionName     String   @map("region_name")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  // Self-referencing: a region can have a parent region
+  parentRegionId String?  @map("parent_region_id")
+  parentRegion   Region?  @relation("RegionHierarchy", fields: [parentRegionId], references: [id])
+  subRegions     Region[] @relation("RegionHierarchy")
+
+  // Packages referencing this region
+  originPackages   Package[] @relation("OriginRegion")
+  destPackages     Package[] @relation("DestRegion")
+  currentPackages  Package[] @relation("CurrentRegion")
+
+  // Bags referencing this region
+  originBags       Bag[] @relation("BagOriginRegion")
+  destBags         Bag[] @relation("BagDestRegion")
+
+  // Trucks stationed at this region
+  trucks           Truck[] @relation("TruckRegion")
+
+  // Truck schedules for this region
+  truckSchedules   TruckSchedule[]
+
+  // Status history entries referencing this region
+  statusHistory    PackageStatusHistory[] @relation("StatusRegion")
+
+  @@map("regions")
+}
+
+/// Packages in the logistics system — tracks origin, destination, and current region.
+/// Unlike the Collection app, there is no billing data here.
+model Package {
+  id              String        @id @default(uuid())
+  trackingId      String        @unique @map("tracking_id")
+  senderName      String        @map("sender_name")
+  senderAddress   String        @map("sender_address")
+  receiverName    String        @map("receiver_name")
+  receiverAddress String        @map("receiver_address")
+  weightKg        Float         @map("weight_kg")
+  currentStatus   PackageStatus @default(to_be_picked_up) @map("current_status")
+  delayReason     String?       @map("delay_reason")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  // Three region references: where it came from, where it's going, where it is now
+  originRegionId  String  @map("origin_region_id")
+  originRegion    Region  @relation("OriginRegion", fields: [originRegionId], references: [id])
+
+  destRegionId    String  @map("dest_region_id")
+  destRegion      Region  @relation("DestRegion", fields: [destRegionId], references: [id])
+
+  currentRegionId String  @map("current_region_id")
+  currentRegion   Region  @relation("CurrentRegion", fields: [currentRegionId], references: [id])
+
+  // Package can be in multiple bags over its journey (one at a time typically)
+  bagPackages     BagPackage[]
+
+  // Full status audit trail
+  statusHistory   PackageStatusHistory[]
+
+  @@map("packages")
+}
+
+/// Sealed bags group packages going in the same direction.
+/// Bags are created "open", packages are added, then the bag is "sealed".
+model Bag {
+  id             String    @id @default(uuid())
+  bagCode        String    @unique @map("bag_code")
+  direction      String                              // north, south, east, west
+  status         BagStatus @default(open)
+  sealedAt       DateTime? @map("sealed_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  // Origin and destination regions
+  originRegionId String @map("origin_region_id")
+  originRegion   Region @relation("BagOriginRegion", fields: [originRegionId], references: [id])
+
+  destRegionId   String @map("dest_region_id")
+  destRegion     Region @relation("BagDestRegion", fields: [destRegionId], references: [id])
+
+  // Packages in this bag (M:N via pivot table)
+  bagPackages    BagPackage[]
+
+  // Bags loaded onto trucks
+  truckBags      TruckBag[]
+
+  // Status history entries referencing this bag
+  statusHistory  PackageStatusHistory[] @relation("StatusBag")
+
+  @@map("bags")
+}
+
+/// Pivot table: which packages are in which bag.
+/// A package can appear in multiple bags over its journey,
+/// but the unique constraint prevents duplicates within a single bag.
+model BagPackage {
+  id        String   @id @default(uuid())
+  addedAt   DateTime @default(now()) @map("added_at")
+
+  bagId     String  @map("bag_id")
+  bag       Bag     @relation(fields: [bagId], references: [id], onDelete: Cascade)
+
+  packageId String  @map("package_id")
+  package   Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+
+  @@unique([bagId, packageId])
+  @@map("bag_packages")
+}
+
+/// Trucks that transport sealed bags between regions.
+model Truck {
+  id              String      @id @default(uuid())
+  truckCode       String      @unique @map("truck_code")
+  capacity        Int?                                    // max number of bags
+  status          TruckStatus @default(idle)
+  delayReason     String?     @map("delay_reason")
+  createdAt       DateTime    @default(now()) @map("created_at")
+
+  // Truck's home/current region
+  currentRegionId String @map("current_region_id")
+  currentRegion   Region @relation("TruckRegion", fields: [currentRegionId], references: [id])
+
+  // Schedules for this truck
+  schedules       TruckSchedule[]
+
+  @@map("trucks")
+}
+
+/// A scheduled departure for a truck from a specific region.
+model TruckSchedule {
+  id                  String         @id @default(uuid())
+  scheduledDeparture  DateTime       @map("scheduled_departure")
+  actualDeparture     DateTime?      @map("actual_departure")
+  status              ScheduleStatus @default(scheduled)
+  delayReason         String?        @map("delay_reason")
+  createdAt           DateTime       @default(now()) @map("created_at")
+
+  // Which truck
+  truckId    String @map("truck_id")
+  truck      Truck  @relation(fields: [truckId], references: [id])
+
+  // Departing from which region
+  regionId   String @map("region_id")
+  region     Region @relation(fields: [regionId], references: [id])
+
+  // Bags loaded onto this scheduled departure
+  truckBags  TruckBag[]
+
+  @@map("truck_schedules")
+}
+
+/// Pivot table: which bags are loaded onto which truck schedule.
+model TruckBag {
+  id        String   @id @default(uuid())
+  loadedAt  DateTime @default(now()) @map("loaded_at")
+
+  truckScheduleId String        @map("truck_schedule_id")
+  truckSchedule   TruckSchedule @relation(fields: [truckScheduleId], references: [id], onDelete: Cascade)
+
+  bagId     String @map("bag_id")
+  bag       Bag    @relation(fields: [bagId], references: [id], onDelete: Cascade)
+
+  @@unique([truckScheduleId, bagId])
+  @@map("truck_bags")
+}
+
+/// Full audit trail: every status change for a package is recorded here.
+/// This enables "show me the history of this package" queries.
+model PackageStatusHistory {
+  id        String   @id @default(uuid())
+  status    String                                      // The status at this point
+  notes     String?                                     // Optional notes about the change
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Which package
+  packageId String  @map("package_id")
+  package   Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+
+  // Optional: which region the package was in
+  regionId  String? @map("region_id")
+  region    Region? @relation("StatusRegion", fields: [regionId], references: [id])
+
+  // Optional: which bag the package was in
+  bagId     String? @map("bag_id")
+  bag       Bag?    @relation("StatusBag", fields: [bagId], references: [id])
+
+  @@map("package_status_history")
+}
