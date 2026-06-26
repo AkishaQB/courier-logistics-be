@@ -232,3 +232,61 @@ export async function sealBag(id: string) {
     },
   });
 }
+
+export async function updateBagStatus(id: string, status: BagStatus, notes?: string) {
+  const bag = await prisma.bag.findUnique({
+    where: { id },
+  });
+  if (!bag) throw new AppError("Bag not found", 404);
+
+  return await prisma.$transaction(async (tx) => {
+    const updatedBag = await tx.bag.update({
+      where: { id },
+      data: { status },
+      include: {
+        originRegion: { select: { regionCode: true, regionName: true } },
+        destRegion: { select: { regionCode: true, regionName: true } },
+        _count: { select: { bagPackages: true } },
+      },
+    });
+
+    let packageStatus: string | null = null;
+    if (status === "delayed") {
+      packageStatus = "delayed";
+    } else if (status === "delivered") {
+      packageStatus = "arrived";
+    } else if (status === "in_transit") {
+      packageStatus = "in_transit";
+    }
+
+    if (packageStatus) {
+      const bagPackages = await tx.bagPackage.findMany({
+        where: { bagId: id },
+        select: { packageId: true },
+      });
+
+      for (const bp of bagPackages) {
+        await tx.package.update({
+          where: { id: bp.packageId },
+          data: {
+            currentStatus: packageStatus as any,
+            ...(packageStatus === "arrived" && { currentRegionId: bag.destRegionId }),
+            ...(packageStatus === "delayed" && { delayReason: notes ?? "Bag delayed" }),
+          },
+        });
+
+        await tx.packageStatusHistory.create({
+          data: {
+            packageId: bp.packageId,
+            status: packageStatus,
+            notes: notes ?? `Bag status updated to ${status}`,
+            bagId: id,
+            regionId: bag.destRegionId,
+          },
+        });
+      }
+    }
+
+    return updatedBag;
+  });
+}

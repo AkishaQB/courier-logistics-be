@@ -29,6 +29,7 @@ enum BagStatus {
   sealed
   in_transit
   delivered
+  delayed
 }
 
 enum TruckStatus {

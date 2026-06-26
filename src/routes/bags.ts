@@ -6,6 +6,7 @@ import {
   createBagSchema,
   idParamSchema,
   listBagsQuerySchema,
+  updateBagStatusSchema,
 } from "../schemas/bags.schemas";
 import {
   addPackageToBagHandler,
@@ -14,6 +15,7 @@ import {
   getBagsHandler,
   removePackageFromBagHandler,
   sealBagHandler,
+  updateBagStatusHandler,
 } from "../controllers/bags.controller";
 
 const router = Router();
@@ -45,5 +47,12 @@ router.delete(
 
 // ─── PATCH /api/bags/:id/seal ─────────────────────────────
 router.patch("/:id/seal", validate({ params: idParamSchema }), sealBagHandler);
+
+// ─── PATCH /api/bags/:id/status ───────────────────────────
+router.patch(
+  "/:id/status",
+  validate({ params: idParamSchema, body: updateBagStatusSchema }),
+  updateBagStatusHandler,
+);
 
 export default router;

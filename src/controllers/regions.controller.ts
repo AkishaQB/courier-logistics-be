@@ -2,10 +2,11 @@ import { Request, Response, NextFunction } from "express";
 import { z } from "zod";
 import {
   getAllRegions,
+  createRegion,
   getRegionById,
   getRegions,
 } from "../services/regions.service";
-import { idParamSchema } from "../schemas/regions.schemas";
+import { createRegionSchema, idParamSchema } from "../schemas/regions.schemas";
 
 export async function getRegionsHandler(
   _req: Request,
@@ -42,6 +43,20 @@ export async function getRegionByIdHandler(
     const { id } = req.params as unknown as z.infer<typeof idParamSchema>;
     const region = await getRegionById(id);
     res.json({ data: region });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function createRegionHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const body = req.body as z.infer<typeof createRegionSchema>;
+    const region = await createRegion(body);
+    res.status(201).json({ data: region });
   } catch (err) {
     next(err);
   }

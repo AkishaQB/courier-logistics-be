@@ -3,6 +3,7 @@ export enum BagStatus {
   sealed = "sealed",
   in_transit = "in_transit",
   delivered = "delivered",
+  delayed = "delayed",
 }
 
 export interface Bag {

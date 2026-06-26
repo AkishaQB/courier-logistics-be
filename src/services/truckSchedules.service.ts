@@ -223,6 +223,18 @@ export async function departTruckSchedule(
       where: { id: schedule.truckId },
       data: { status: "in_transit" },
     });
+
+    const truckBags = await tx.truckBag.findMany({
+      where: { truckScheduleId: id },
+      select: { bagId: true },
+    });
+    const bagIds = truckBags.map((tb) => tb.bagId);
+    if (bagIds.length > 0) {
+      await tx.bag.updateMany({
+        where: { id: { in: bagIds } },
+        data: { status: "in_transit" },
+      });
+    }
   });
 
   return await prisma.truckSchedule.findUnique({
@@ -242,30 +254,86 @@ export async function updateTruckSchedule(
   const schedule = await prisma.truckSchedule.findUnique({ where: { id } });
   if (!schedule) throw new AppError("Schedule not found", 404);
 
-  const updated = await prisma.truckSchedule.update({
-    where: { id },
-    data: {
-      ...(payload.status && { status: payload.status }),
-      ...(payload.delayReason !== undefined && {
-        delayReason: payload.delayReason,
-      }),
-      ...(payload.actualDeparture && {
-        actualDeparture: new Date(payload.actualDeparture),
-      }),
-    },
-    include: {
-      truck: { select: { truckCode: true, status: true } },
-      region: { select: { regionCode: true, regionName: true } },
-      _count: { select: { truckBags: true } },
-    },
-  });
-
-  if (payload.status === "cancelled") {
-    await prisma.truck.update({
-      where: { id: schedule.truckId },
-      data: { status: "idle" },
+  return await prisma.$transaction(async (tx) => {
+    const updated = await tx.truckSchedule.update({
+      where: { id },
+      data: {
+        ...(payload.status && { status: payload.status }),
+        ...(payload.delayReason !== undefined && {
+          delayReason: payload.delayReason,
+        }),
+        ...(payload.actualDeparture && {
+          actualDeparture: new Date(payload.actualDeparture),
+        }),
+      },
+      include: {
+        truck: { select: { truckCode: true, status: true } },
+        region: { select: { regionCode: true, regionName: true } },
+        _count: { select: { truckBags: true } },
+      },
     });
-  }
 
-  return updated;
+    if (payload.status === "cancelled") {
+      await tx.truck.update({
+        where: { id: schedule.truckId },
+        data: { status: "idle" },
+      });
+
+      const truckBags = await tx.truckBag.findMany({
+        where: { truckScheduleId: id },
+        select: { bagId: true },
+      });
+      const bagIds = truckBags.map((tb) => tb.bagId);
+      if (bagIds.length > 0) {
+        await tx.bag.updateMany({
+          where: { id: { in: bagIds } },
+          data: { status: "sealed" },
+        });
+      }
+    }
+
+    if (payload.status === "delayed") {
+      const truckBags = await tx.truckBag.findMany({
+        where: { truckScheduleId: id },
+        include: {
+          bag: {
+            include: {
+              bagPackages: {
+                select: { packageId: true },
+              },
+            },
+          },
+        },
+      });
+
+      for (const tb of truckBags) {
+        await tx.bag.update({
+          where: { id: tb.bagId },
+          data: { status: "delayed" },
+        });
+
+        for (const bp of tb.bag.bagPackages) {
+          await tx.package.update({
+            where: { id: bp.packageId },
+            data: {
+              currentStatus: "delayed",
+              delayReason: payload.delayReason ?? "Truck schedule delayed",
+            },
+          });
+
+          await tx.packageStatusHistory.create({
+            data: {
+              packageId: bp.packageId,
+              status: "delayed",
+              notes: payload.delayReason ?? `Delayed due to truck schedule delay for truck ${updated.truck.truckCode}`,
+              bagId: tb.bagId,
+              regionId: schedule.regionId,
+            },
+          });
+        }
+      }
+    }
+
+    return updated;
+  });
 }

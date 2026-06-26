@@ -31,6 +31,7 @@ app.get("/", (_, res) => {
       "GET  /api/regions",
       "GET  /api/regions/all",
       "GET  /api/regions/:id",
+      "POST /api/regions",
       "GET  /api/packages",
       "GET  /api/packages/:id",
       "GET  /api/packages/track/:trackingId",
@@ -54,6 +55,10 @@ app.get("/", (_, res) => {
       "PATCH /api/truck-schedules/:id/depart",
       "PATCH /api/truck-schedules/:id",
       "GET  /api/dashboard",
+      "GET  /api/dashboard/new-arrivals",
+      "GET  /api/dashboard/truck-arrivals",
+      "GET  /api/dashboard/loaded",
+      "GET  /api/dashboard/delayed",
     ],
   });
 });

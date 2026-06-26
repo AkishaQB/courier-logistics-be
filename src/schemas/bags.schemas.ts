@@ -15,9 +15,14 @@ export const addPackageSchema = z.object({
 });
 
 export const listBagsQuerySchema = z.object({
-  status: z.enum(Object.values(BagStatus)).optional(),
+  status: z.enum(Object.values(BagStatus) as [string, ...string[]]).optional(),
   originRegionId: z.string().uuid().optional(),
   destRegionId: z.string().uuid().optional(),
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(100).default(20),
+});
+
+export const updateBagStatusSchema = z.object({
+  status: z.nativeEnum(BagStatus),
+  notes: z.string().optional(),
 });

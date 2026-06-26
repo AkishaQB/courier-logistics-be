@@ -1,3 +1,5 @@
 import z from "zod";
 
-export const dashboardQuerySchema = z.object({});
+export const dashboardQuerySchema = z.object({
+  regionId: z.string().uuid().optional(),
+});

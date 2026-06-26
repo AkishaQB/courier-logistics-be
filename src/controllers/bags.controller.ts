@@ -5,6 +5,7 @@ import {
   createBagSchema,
   idParamSchema,
   listBagsQuerySchema,
+  updateBagStatusSchema,
 } from "../schemas/bags.schemas";
 import {
   addPackageToBag,
@@ -13,6 +14,7 @@ import {
   getBags,
   removePackageFromBag,
   sealBag,
+  updateBagStatus,
 } from "../services/bags.service";
 import { AppError } from "../utils/AppError";
 
@@ -98,6 +100,21 @@ export async function sealBagHandler(
   try {
     const { id } = req.params as z.infer<typeof idParamSchema>;
     const bag = await sealBag(id);
+    res.json({ data: bag });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function updateBagStatusHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const { id } = req.params as z.infer<typeof idParamSchema>;
+    const { status, notes } = req.body as z.infer<typeof updateBagStatusSchema>;
+    const bag = await updateBagStatus(id, status, notes);
     res.json({ data: bag });
   } catch (err) {
     next(err);
