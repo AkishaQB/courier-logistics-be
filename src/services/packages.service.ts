@@ -1,5 +1,6 @@
 import { prisma } from "../config/database";
 import { AppError } from "../utils/AppError";
+import { firePackageStatusWebhook } from "../utils/webhook";
 import { z } from "zod";
 import {
   createPackageSchema,
@@ -165,8 +166,8 @@ export async function updatePackageStatus(
     throw new AppError("Package not found", 404);
   }
 
-  return await prisma.$transaction(async (tx) => {
-    const pkg = await tx.package.update({
+  const pkg = await prisma.$transaction(async (tx) => {
+    const updated = await tx.package.update({
       where: { id },
       data: {
         currentStatus: payload.status,
@@ -192,8 +193,20 @@ export async function updatePackageStatus(
       },
     });
 
-    return pkg;
+    return updated;
   });
+
+  // ── Outbound webhook (fire-and-forget) ─────────────────────────────────────
+  // Called AFTER the transaction commits so the Track BE receiver is never
+  // looking at an in-progress write. Never awaited — keeps the API response fast.
+  firePackageStatusWebhook({
+    trackingId: existing.trackingId,
+    status: payload.status,
+    regionCode: pkg.currentRegion.regionCode,
+    notes: payload.notes,
+  });
+
+  return pkg;
 }
 
 export async function getPackageHistory(id: string) {
