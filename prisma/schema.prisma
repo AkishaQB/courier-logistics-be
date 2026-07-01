@@ -245,3 +245,10 @@ model PackageStatusHistory {
 
   @@map("package_status_history")
 }
+
+model EtlState {
+  id           String   @id @default(uuid())
+  lastPushedAt DateTime @default(now()) @map("last_pushed_at")
+
+  @@map("etl_state")
+}

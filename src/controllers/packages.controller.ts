@@ -7,6 +7,7 @@ import {
   getPackageHistory,
   getPackages,
   updatePackageStatus,
+  webhookCreatePackage,
 } from "../services/packages.service";
 import {
   createPackageSchema,
@@ -14,6 +15,7 @@ import {
   listQuerySchema,
   trackingIdParamSchema,
   updateStatusSchema,
+  webhookCreatePackageSchema,
 } from "../schemas/packages.schemas";
 
 export async function getPackagesHandler(
@@ -97,6 +99,20 @@ export async function getPackageHistoryHandler(
     const { id } = req.params as z.infer<typeof idParamSchema>;
     const history = await getPackageHistory(id);
     res.json({ data: history });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function webhookCreatePackageHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const payload = req.body as z.infer<typeof webhookCreatePackageSchema>;
+    const pkg = await webhookCreatePackage(payload);
+    res.status(201).json({ data: pkg });
   } catch (err) {
     next(err);
   }

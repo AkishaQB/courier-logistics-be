@@ -41,3 +41,13 @@ export const listQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(100).default(20),
 });
+
+export const webhookCreatePackageSchema = z.object({
+  trackingId: z.string().uuid(),
+  senderName: z.string().min(1),
+  senderAddress: z.string().min(1),
+  receiverName: z.string().min(1),
+  receiverAddress: z.string().min(1),
+  weightKg: z.number().positive(),
+  regionCode: z.string().min(1),
+});

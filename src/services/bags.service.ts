@@ -1,7 +1,6 @@
 import { prisma } from "../config/database";
 import { AppError } from "../utils/AppError";
 import { BagStatus } from "../interfaces/bags.interface";
-import { firePackageStatusWebhook } from "../utils/webhook";
 
 export interface GetBagsOptions {
   page: number;
@@ -160,13 +159,6 @@ export async function addPackageToBag(bagId: string, packageId: string) {
     });
   });
 
-  firePackageStatusWebhook({
-    trackingId: pkg.trackingId,
-    status: "added_to_bag",
-    regionCode: pkg.currentRegion.regionCode,
-    notes: `Added to bag ${bag.bagCode}`,
-  });
-
   return prisma.bag.findUnique({
     where: { id: bagId },
     include: {
@@ -216,19 +208,6 @@ export async function removePackageFromBag(bagId: string, packageId: string) {
     });
   });
 
-  const pkg = await prisma.package.findUnique({
-    where: { id: packageId },
-    include: { currentRegion: { select: { regionCode: true } } },
-  });
-
-  if (pkg) {
-    firePackageStatusWebhook({
-      trackingId: pkg.trackingId,
-      status: "picked_up",
-      regionCode: pkg.currentRegion.regionCode,
-      notes: `Removed from bag ${bag.bagCode}`,
-    });
-  }
 }
 
 export async function sealBag(id: string, sealNumber: string) {
@@ -320,25 +299,6 @@ export async function updateBagStatus(id: string, status: BagStatus, notes?: str
     return updatedBag;
   });
 
-  if (updatedPackageIds.length > 0) {
-    const packages = await prisma.package.findMany({
-      where: { id: { in: updatedPackageIds } },
-      select: {
-        trackingId: true,
-        currentStatus: true,
-        currentRegion: { select: { regionCode: true } },
-      },
-    });
-
-    for (const pkg of packages) {
-      firePackageStatusWebhook({
-        trackingId: pkg.trackingId,
-        status: pkg.currentStatus,
-        regionCode: pkg.currentRegion.regionCode,
-        notes: notes ?? `Bag status updated to ${status}`,
-      });
-    }
-  }
 
   return updatedBag;
 }

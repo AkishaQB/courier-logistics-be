@@ -1,6 +1,5 @@
 import { prisma } from "../config/database";
 import { AppError } from "../utils/AppError";
-import { firePackageStatusWebhook } from "../utils/webhook";
 import { z } from "zod";
 import {
   createScheduleSchema,
@@ -163,8 +162,6 @@ export async function loadBagOntoTruckSchedule(
     );
   }
 
-  let updatedPackageIds: string[] = [];
-
   await prisma.$transaction(async (tx) => {
     await tx.truckBag.create({
       data: { truckScheduleId: scheduleId, bagId: payload.bagId },
@@ -174,8 +171,6 @@ export async function loadBagOntoTruckSchedule(
       where: { bagId: payload.bagId },
       select: { packageId: true },
     });
-
-    updatedPackageIds = bagPackages.map((bp) => bp.packageId);
 
     for (const bp of bagPackages) {
       await tx.package.update({
@@ -193,26 +188,6 @@ export async function loadBagOntoTruckSchedule(
       });
     }
   });
-
-  if (updatedPackageIds.length > 0) {
-    const packages = await prisma.package.findMany({
-      where: { id: { in: updatedPackageIds } },
-      select: {
-        trackingId: true,
-        currentStatus: true,
-        currentRegion: { select: { regionCode: true } },
-      },
-    });
-
-    for (const pkg of packages) {
-      firePackageStatusWebhook({
-        trackingId: pkg.trackingId,
-        status: pkg.currentStatus,
-        regionCode: pkg.currentRegion.regionCode,
-        notes: `Loaded onto truck via bag ${bag.bagCode}`,
-      });
-    }
-  }
 
   return await prisma.truckSchedule.findUnique({
     where: { id: scheduleId },
@@ -254,8 +229,6 @@ export async function departTruckSchedule(
     ? new Date(payload.actualDeparture)
     : new Date();
 
-  let updatedPackageIds: string[] = [];
-
   await prisma.$transaction(async (tx) => {
     await tx.truckSchedule.update({
       where: { id },
@@ -276,34 +249,8 @@ export async function departTruckSchedule(
         where: { id: { in: bagIds } },
         data: { status: "in_transit" },
       });
-
-      const bagPackages = await tx.bagPackage.findMany({
-        where: { bagId: { in: bagIds } },
-        select: { packageId: true },
-      });
-      updatedPackageIds = bagPackages.map((bp) => bp.packageId);
     }
   });
-
-  if (updatedPackageIds.length > 0) {
-    const packages = await prisma.package.findMany({
-      where: { id: { in: updatedPackageIds } },
-      select: {
-        trackingId: true,
-        currentStatus: true,
-        currentRegion: { select: { regionCode: true } },
-      },
-    });
-
-    for (const pkg of packages) {
-      firePackageStatusWebhook({
-        trackingId: pkg.trackingId,
-        status: pkg.currentStatus,
-        regionCode: pkg.currentRegion.regionCode,
-        notes: `Truck schedule departed (Actual Departure: ${departureTime.toISOString()})`,
-      });
-    }
-  }
 
   return await prisma.truckSchedule.findUnique({
     where: { id },
@@ -321,8 +268,6 @@ export async function updateTruckSchedule(
 ) {
   const schedule = await prisma.truckSchedule.findUnique({ where: { id } });
   if (!schedule) throw new AppError("Schedule not found", 404);
-
-  let updatedPackageIds: string[] = [];
 
   const updated = await prisma.$transaction(async (tx) => {
     const updated = await tx.truckSchedule.update({
@@ -383,7 +328,6 @@ export async function updateTruckSchedule(
         });
 
         for (const bp of tb.bag.bagPackages) {
-          updatedPackageIds.push(bp.packageId);
           await tx.package.update({
             where: { id: bp.packageId },
             data: {
@@ -436,8 +380,6 @@ export async function updateTruckSchedule(
           const packageIds = tb.bag.bagPackages.map(bp => bp.packageId);
 
           if (packageIds.length > 0) {
-            updatedPackageIds.push(...packageIds);
-
             await tx.package.updateMany({
               where: { id: { in: packageIds } },
               data: {
@@ -465,28 +407,6 @@ export async function updateTruckSchedule(
     return updated;
   });
 
-  if (updatedPackageIds.length > 0) {
-    const packages = await prisma.package.findMany({
-      where: { id: { in: updatedPackageIds } },
-      select: {
-        trackingId: true,
-        currentStatus: true,
-        currentRegion: { select: { regionCode: true } },
-        delayReason: true,
-      },
-    });
-
-    for (const pkg of packages) {
-      firePackageStatusWebhook({
-        trackingId: pkg.trackingId,
-        status: pkg.currentStatus,
-        regionCode: pkg.currentRegion.regionCode,
-        notes: pkg.currentStatus === "delayed"
-          ? (pkg.delayReason ?? "Truck schedule delayed")
-          : `Truck schedule status updated to ${payload.status}`,
-      });
-    }
-  }
 
   return updated;
 }

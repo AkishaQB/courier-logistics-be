@@ -1,11 +1,11 @@
 import { prisma } from "../config/database";
 import { AppError } from "../utils/AppError";
-import { firePackageStatusWebhook } from "../utils/webhook";
 import { z } from "zod";
 import {
   createPackageSchema,
   listQuerySchema,
   updateStatusSchema,
+  webhookCreatePackageSchema,
 } from "../schemas/packages.schemas";
 
 export type CreatePackageInput = z.infer<typeof createPackageSchema>;
@@ -196,17 +196,66 @@ export async function updatePackageStatus(
     return updated;
   });
 
-  // ── Outbound webhook (fire-and-forget) ─────────────────────────────────────
-  // Called AFTER the transaction commits so the Track BE receiver is never
-  // looking at an in-progress write. Never awaited — keeps the API response fast.
-  firePackageStatusWebhook({
-    trackingId: existing.trackingId,
-    status: payload.status,
-    regionCode: pkg.currentRegion.regionCode,
-    notes: payload.notes,
-  });
 
   return pkg;
+}
+
+export type WebhookCreatePackageInput = z.infer<typeof webhookCreatePackageSchema>;
+
+export async function webhookCreatePackage(payload: WebhookCreatePackageInput) {
+  // Resolve regionCode → region UUID
+  const region = await prisma.region.findUnique({
+    where: { regionCode: payload.regionCode },
+  });
+  if (!region) {
+    throw new AppError(
+      `Region code '${payload.regionCode}' not found`,
+      400,
+    );
+  }
+
+  // Reject duplicate tracking IDs
+  const existing = await prisma.package.findUnique({
+    where: { trackingId: payload.trackingId },
+  });
+  if (existing) {
+    throw new AppError(
+      `Tracking ID '${payload.trackingId}' already exists`,
+      409,
+    );
+  }
+
+  return await prisma.$transaction(async (tx) => {
+    const created = await tx.package.create({
+      data: {
+        trackingId: payload.trackingId,
+        senderName: payload.senderName,
+        senderAddress: payload.senderAddress,
+        receiverName: payload.receiverName,
+        receiverAddress: payload.receiverAddress,
+        weightKg: payload.weightKg,
+        originRegionId: region.id,
+        destRegionId: region.id,
+        currentRegionId: region.id,
+      },
+      include: {
+        originRegion: { select: { regionCode: true, regionName: true } },
+        destRegion: { select: { regionCode: true, regionName: true } },
+        currentRegion: { select: { regionCode: true, regionName: true } },
+      },
+    });
+
+    await tx.packageStatusHistory.create({
+      data: {
+        packageId: created.id,
+        status: "to_be_picked_up",
+        notes: "Package registered via webhook from tracking system",
+        regionId: region.id,
+      },
+    });
+
+    return created;
+  });
 }
 
 export async function getPackageHistory(id: string) {
@@ -224,3 +273,4 @@ export async function getPackageHistory(id: string) {
     orderBy: { createdAt: "asc" },
   });
 }
+
