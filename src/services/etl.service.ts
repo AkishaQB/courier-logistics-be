@@ -16,7 +16,7 @@ export async function runLogisticsPushEtl() {
         data: { lastPushedAt: new Date(0) },
       });
     }
-
+    console.log('etlState', etlState)
     const lastPushedAt = etlState.lastPushedAt;
 
     // 2. Fetch package status history records after lastPushedAt
@@ -30,6 +30,7 @@ export async function runLogisticsPushEtl() {
       },
       orderBy: { createdAt: "asc" },
     });
+    console.log('updates', updates)
 
     if (updates.length === 0) return;
 
@@ -43,10 +44,11 @@ export async function runLogisticsPushEtl() {
       notes: history.notes || undefined,
       timestamp: history.createdAt.toISOString(),
     }));
+    console.log('formattedUpdates', formattedUpdates)
 
     // 4. Send bulk payload to Track BE raw updates endpoint
-    const trackBeUrl = process.env.TRACK_BE_RAW_UPDATES_URL || "http://localhost:3000/api/internal/raw-updates";
-    
+    const trackBeUrl = process.env.TRACK_BE_RAW_UPDATES_URL || "http://localhost:3001/api/internal/raw-updates";
+    console.log('trackBeUrl', trackBeUrl)
     const response = await fetch(trackBeUrl, {
       method: "POST",
       headers: {
@@ -54,13 +56,16 @@ export async function runLogisticsPushEtl() {
       },
       body: JSON.stringify({ updates: formattedUpdates }),
     });
+    console.log('response', response)
 
-    if (!response.ok) {
+    if (!response || !response.ok) {
       console.error(`[Push ETL] Track BE raw updates API failed with status ${response.status}`);
       return;
     }
 
     const resData = await response.json();
+        console.log('resData', resData)
+
     console.log(`[Push ETL] Successfully pushed ${updates.length} updates. Track BE saved count: ${resData.count}`);
 
     // 5. Update lastPushedAt to the maximum createdAt in the batch
