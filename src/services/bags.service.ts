@@ -1,6 +1,7 @@
 import { prisma } from "../config/database";
 import { AppError } from "../utils/AppError";
 import { BagStatus } from "../interfaces/bags.interface";
+import { firePackageStatusWebhook } from "../utils/webhook";
 
 export interface GetBagsOptions {
   page: number;
@@ -123,7 +124,10 @@ export async function addPackageToBag(bagId: string, packageId: string) {
     throw new AppError("Cannot add packages to a bag that is not open", 400);
   }
 
-  const pkg = await prisma.package.findUnique({ where: { id: packageId } });
+  const pkg = await prisma.package.findUnique({
+    where: { id: packageId },
+    include: { currentRegion: { select: { regionCode: true } } },
+  });
   if (!pkg) throw new AppError("Package not found", 404);
 
   const alreadyInBag = await prisma.bagPackage.findFirst({
@@ -154,6 +158,13 @@ export async function addPackageToBag(bagId: string, packageId: string) {
         regionId: bag.originRegionId,
       },
     });
+  });
+
+  firePackageStatusWebhook({
+    trackingId: pkg.trackingId,
+    status: "added_to_bag",
+    regionCode: pkg.currentRegion.regionCode,
+    notes: `Added to bag ${bag.bagCode}`,
   });
 
   return prisma.bag.findUnique({
@@ -204,9 +215,23 @@ export async function removePackageFromBag(bagId: string, packageId: string) {
       },
     });
   });
+
+  const pkg = await prisma.package.findUnique({
+    where: { id: packageId },
+    include: { currentRegion: { select: { regionCode: true } } },
+  });
+
+  if (pkg) {
+    firePackageStatusWebhook({
+      trackingId: pkg.trackingId,
+      status: "picked_up",
+      regionCode: pkg.currentRegion.regionCode,
+      notes: `Removed from bag ${bag.bagCode}`,
+    });
+  }
 }
 
-export async function sealBag(id: string) {
+export async function sealBag(id: string, sealNumber: string) {
   const bag = await prisma.bag.findUnique({
     where: { id },
     include: { _count: { select: { bagPackages: true } } },
@@ -223,6 +248,7 @@ export async function sealBag(id: string) {
     where: { id },
     data: {
       status: "sealed",
+      sealNumber,
       sealedAt: new Date(),
     },
     include: {
@@ -239,7 +265,9 @@ export async function updateBagStatus(id: string, status: BagStatus, notes?: str
   });
   if (!bag) throw new AppError("Bag not found", 404);
 
-  return await prisma.$transaction(async (tx) => {
+  let updatedPackageIds: string[] = [];
+
+  const updatedBag = await prisma.$transaction(async (tx) => {
     const updatedBag = await tx.bag.update({
       where: { id },
       data: { status },
@@ -265,6 +293,8 @@ export async function updateBagStatus(id: string, status: BagStatus, notes?: str
         select: { packageId: true },
       });
 
+      updatedPackageIds = bagPackages.map((bp) => bp.packageId);
+
       for (const bp of bagPackages) {
         await tx.package.update({
           where: { id: bp.packageId },
@@ -289,4 +319,26 @@ export async function updateBagStatus(id: string, status: BagStatus, notes?: str
 
     return updatedBag;
   });
+
+  if (updatedPackageIds.length > 0) {
+    const packages = await prisma.package.findMany({
+      where: { id: { in: updatedPackageIds } },
+      select: {
+        trackingId: true,
+        currentStatus: true,
+        currentRegion: { select: { regionCode: true } },
+      },
+    });
+
+    for (const pkg of packages) {
+      firePackageStatusWebhook({
+        trackingId: pkg.trackingId,
+        status: pkg.currentStatus,
+        regionCode: pkg.currentRegion.regionCode,
+        notes: notes ?? `Bag status updated to ${status}`,
+      });
+    }
+  }
+
+  return updatedBag;
 }

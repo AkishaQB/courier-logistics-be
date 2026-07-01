@@ -1,5 +1,6 @@
 import { prisma } from "../config/database";
 import { AppError } from "../utils/AppError";
+import { firePackageStatusWebhook } from "../utils/webhook";
 import { z } from "zod";
 import {
   createScheduleSchema,
@@ -32,6 +33,17 @@ export async function getTruckSchedules(opts: GetTruckSchedulesOptions) {
         truck: { select: { truckCode: true, status: true, capacity: true } },
         region: { select: { regionCode: true, regionName: true } },
         _count: { select: { truckBags: true } },
+        truckBags: {
+          include: {
+            bag: {
+              include: {
+                originRegion: { select: { regionCode: true, regionName: true } },
+                destRegion: { select: { regionCode: true, regionName: true } },
+                _count: { select: { bagPackages: true } },
+              },
+            },
+          },
+        },
       },
       orderBy: { scheduledDeparture: "desc" },
       skip,
@@ -77,7 +89,7 @@ export async function getTruckScheduleById(id: string) {
 export async function createTruckSchedule(payload: CreateTruckScheduleInput) {
   const [truck, region] = await Promise.all([
     prisma.truck.findUnique({ where: { id: payload.truckId } }),
-    prisma.region.findUnique({ where: { id: payload.regionId } }),
+    prisma.region.findUnique({ where: { id: payload.originRegionId } }),
   ]);
 
   if (!truck) throw new AppError("Truck not found", 404);
@@ -93,8 +105,12 @@ export async function createTruckSchedule(payload: CreateTruckScheduleInput) {
   const schedule = await prisma.truckSchedule.create({
     data: {
       truckId: payload.truckId,
-      regionId: payload.regionId,
-      scheduledDeparture: new Date(payload.scheduledDeparture),
+      regionId: payload.originRegionId,
+      scheduledDeparture: new Date(payload.departureTime),
+      routeDescription: payload.routeDescription,
+      estimatedArrivalTime: payload.estimatedArrivalTime
+        ? new Date(payload.estimatedArrivalTime)
+        : null,
     },
     include: {
       truck: { select: { truckCode: true } },
@@ -147,6 +163,8 @@ export async function loadBagOntoTruckSchedule(
     );
   }
 
+  let updatedPackageIds: string[] = [];
+
   await prisma.$transaction(async (tx) => {
     await tx.truckBag.create({
       data: { truckScheduleId: scheduleId, bagId: payload.bagId },
@@ -156,6 +174,8 @@ export async function loadBagOntoTruckSchedule(
       where: { bagId: payload.bagId },
       select: { packageId: true },
     });
+
+    updatedPackageIds = bagPackages.map((bp) => bp.packageId);
 
     for (const bp of bagPackages) {
       await tx.package.update({
@@ -173,6 +193,26 @@ export async function loadBagOntoTruckSchedule(
       });
     }
   });
+
+  if (updatedPackageIds.length > 0) {
+    const packages = await prisma.package.findMany({
+      where: { id: { in: updatedPackageIds } },
+      select: {
+        trackingId: true,
+        currentStatus: true,
+        currentRegion: { select: { regionCode: true } },
+      },
+    });
+
+    for (const pkg of packages) {
+      firePackageStatusWebhook({
+        trackingId: pkg.trackingId,
+        status: pkg.currentStatus,
+        regionCode: pkg.currentRegion.regionCode,
+        notes: `Loaded onto truck via bag ${bag.bagCode}`,
+      });
+    }
+  }
 
   return await prisma.truckSchedule.findUnique({
     where: { id: scheduleId },
@@ -214,6 +254,8 @@ export async function departTruckSchedule(
     ? new Date(payload.actualDeparture)
     : new Date();
 
+  let updatedPackageIds: string[] = [];
+
   await prisma.$transaction(async (tx) => {
     await tx.truckSchedule.update({
       where: { id },
@@ -234,8 +276,34 @@ export async function departTruckSchedule(
         where: { id: { in: bagIds } },
         data: { status: "in_transit" },
       });
+
+      const bagPackages = await tx.bagPackage.findMany({
+        where: { bagId: { in: bagIds } },
+        select: { packageId: true },
+      });
+      updatedPackageIds = bagPackages.map((bp) => bp.packageId);
     }
   });
+
+  if (updatedPackageIds.length > 0) {
+    const packages = await prisma.package.findMany({
+      where: { id: { in: updatedPackageIds } },
+      select: {
+        trackingId: true,
+        currentStatus: true,
+        currentRegion: { select: { regionCode: true } },
+      },
+    });
+
+    for (const pkg of packages) {
+      firePackageStatusWebhook({
+        trackingId: pkg.trackingId,
+        status: pkg.currentStatus,
+        regionCode: pkg.currentRegion.regionCode,
+        notes: `Truck schedule departed (Actual Departure: ${departureTime.toISOString()})`,
+      });
+    }
+  }
 
   return await prisma.truckSchedule.findUnique({
     where: { id },
@@ -254,7 +322,9 @@ export async function updateTruckSchedule(
   const schedule = await prisma.truckSchedule.findUnique({ where: { id } });
   if (!schedule) throw new AppError("Schedule not found", 404);
 
-  return await prisma.$transaction(async (tx) => {
+  let updatedPackageIds: string[] = [];
+
+  const updated = await prisma.$transaction(async (tx) => {
     const updated = await tx.truckSchedule.update({
       where: { id },
       data: {
@@ -313,6 +383,7 @@ export async function updateTruckSchedule(
         });
 
         for (const bp of tb.bag.bagPackages) {
+          updatedPackageIds.push(bp.packageId);
           await tx.package.update({
             where: { id: bp.packageId },
             data: {
@@ -334,6 +405,88 @@ export async function updateTruckSchedule(
       }
     }
 
+    if (payload.status === "arrived") {
+      const truckBags = await tx.truckBag.findMany({
+        where: { truckScheduleId: id },
+        include: {
+          bag: {
+            include: {
+              bagPackages: { select: { packageId: true } }
+            }
+          }
+        }
+      });
+
+      const destinationRegionId = truckBags[0]?.bag?.destRegionId || schedule.regionId;
+
+      await tx.truck.update({
+        where: { id: schedule.truckId },
+        data: { status: "idle", currentRegionId: destinationRegionId },
+      });
+
+      const bagIds = truckBags.map((tb) => tb.bagId);
+      if (bagIds.length > 0) {
+        await tx.bag.updateMany({
+          where: { id: { in: bagIds } },
+          data: { status: "delivered" },
+        });
+
+        for (const tb of truckBags) {
+          const destId = tb.bag.destRegionId;
+          const packageIds = tb.bag.bagPackages.map(bp => bp.packageId);
+
+          if (packageIds.length > 0) {
+            updatedPackageIds.push(...packageIds);
+
+            await tx.package.updateMany({
+              where: { id: { in: packageIds } },
+              data: {
+                currentStatus: "arrived",
+                currentRegionId: destId
+              }
+            });
+
+            for (const packageId of packageIds) {
+              await tx.packageStatusHistory.create({
+                data: {
+                  packageId,
+                  status: "arrived",
+                  notes: `Arrived at destination hub via truck ${updated.truck.truckCode}`,
+                  bagId: tb.bagId,
+                  regionId: destId,
+                }
+              });
+            }
+          }
+        }
+      }
+    }
+
     return updated;
   });
+
+  if (updatedPackageIds.length > 0) {
+    const packages = await prisma.package.findMany({
+      where: { id: { in: updatedPackageIds } },
+      select: {
+        trackingId: true,
+        currentStatus: true,
+        currentRegion: { select: { regionCode: true } },
+        delayReason: true,
+      },
+    });
+
+    for (const pkg of packages) {
+      firePackageStatusWebhook({
+        trackingId: pkg.trackingId,
+        status: pkg.currentStatus,
+        regionCode: pkg.currentRegion.regionCode,
+        notes: pkg.currentStatus === "delayed"
+          ? (pkg.delayReason ?? "Truck schedule delayed")
+          : `Truck schedule status updated to ${payload.status}`,
+      });
+    }
+  }
+
+  return updated;
 }

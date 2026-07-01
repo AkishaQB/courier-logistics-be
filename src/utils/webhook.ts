@@ -1,6 +1,7 @@
 import { createHmac } from "crypto";
 import { request as httpRequest } from "http";
 import { request as httpsRequest } from "https";
+import "dotenv/config";
 
 // ─── Payload shape sent on every package status change ────────────────────────
 

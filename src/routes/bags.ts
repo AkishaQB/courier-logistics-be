@@ -6,6 +6,7 @@ import {
   createBagSchema,
   idParamSchema,
   listBagsQuerySchema,
+  sealBagSchema,
   updateBagStatusSchema,
 } from "../schemas/bags.schemas";
 import {
@@ -46,7 +47,11 @@ router.delete(
 );
 
 // ─── PATCH /api/bags/:id/seal ─────────────────────────────
-router.patch("/:id/seal", validate({ params: idParamSchema }), sealBagHandler);
+router.patch(
+  "/:id/seal",
+  validate({ params: idParamSchema, body: sealBagSchema }),
+  sealBagHandler,
+);
 
 // ─── PATCH /api/bags/:id/status ───────────────────────────
 router.patch(

@@ -44,6 +44,7 @@ enum ScheduleStatus {
   departed
   delayed
   cancelled
+  arrived
 }
 
 // ─── Models ──────────────────────────────────────────────
@@ -123,6 +124,7 @@ model Bag {
   bagCode        String    @unique @map("bag_code")
   direction      String                              // north, south, east, west
   status         BagStatus @default(open)
+  sealNumber     String?   @map("seal_number")
   sealedAt       DateTime? @map("sealed_at")
   createdAt      DateTime  @default(now()) @map("created_at")
 
@@ -186,6 +188,8 @@ model TruckSchedule {
   id                  String         @id @default(uuid())
   scheduledDeparture  DateTime       @map("scheduled_departure")
   actualDeparture     DateTime?      @map("actual_departure")
+  routeDescription    String?        @map("route_description")
+  estimatedArrivalTime DateTime?     @map("estimated_arrival_time")
   status              ScheduleStatus @default(scheduled)
   delayReason         String?        @map("delay_reason")
   createdAt           DateTime       @default(now()) @map("created_at")

@@ -5,13 +5,17 @@ export const idParamSchema = z.object({ id: z.string().uuid() });
 
 export const createBagSchema = z.object({
   bagCode: z.string().min(1),
-  direction: z.string().min(1),
+  direction: z.string().min(1).optional().default("general"),
   originRegionId: z.string().uuid(),
   destRegionId: z.string().uuid(),
 });
 
 export const addPackageSchema = z.object({
   packageId: z.string().uuid(),
+});
+
+export const sealBagSchema = z.object({
+  sealNumber: z.string().min(1),
 });
 
 export const listBagsQuerySchema = z.object({

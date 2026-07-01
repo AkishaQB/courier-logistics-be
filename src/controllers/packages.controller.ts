@@ -80,6 +80,7 @@ export async function updatePackageStatusHandler(
   try {
     const { id } = req.params as z.infer<typeof idParamSchema>;
     const payload = req.body as z.infer<typeof updateStatusSchema>;
+    console.log('payload', payload)
     const pkg = await updatePackageStatus(id, payload);
     res.json({ data: pkg });
   } catch (err) {

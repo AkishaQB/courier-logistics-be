@@ -5,6 +5,7 @@ import {
   createBagSchema,
   idParamSchema,
   listBagsQuerySchema,
+  sealBagSchema,
   updateBagStatusSchema,
 } from "../schemas/bags.schemas";
 import {
@@ -99,7 +100,8 @@ export async function sealBagHandler(
 ): Promise<void> {
   try {
     const { id } = req.params as z.infer<typeof idParamSchema>;
-    const bag = await sealBag(id);
+    const { sealNumber } = req.body as z.infer<typeof sealBagSchema>;
+    const bag = await sealBag(id, sealNumber);
     res.json({ data: bag });
   } catch (err) {
     next(err);
